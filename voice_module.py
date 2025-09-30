@@ -25,17 +25,18 @@ import logging
 # Load environment variables from .env file
 load_dotenv()
 # Get the API key
-api_key = 'YOUR_OPENAI_API_KEY'  # Replace with your actual OpenAI API key
+api_key = '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'  # Replace with your actual OpenAI API key
 client = OpenAI(api_key=api_key)
 def speech_to_text(file_path):
-  audio_file = open(file_path, "rb")
-  response = client.audio.transcriptions.create(
-      model="whisper-1",
-      file=audio_file,
-      language="en"
-  )
-  print(f"DEBUG: {response.text}")
-  return response.text
+    with open(file_path, "rb") as audio_file:
+        response = client.audio.transcriptions.create(
+            model="whisper-1",
+            file=audio_file,
+            language="en"
+        )
+    print(f"DEBUG: {response.text}")
+    return response.text
+
 def text_to_speech(text):
     # Generate speech
     response = client.audio.speech.create(
@@ -50,6 +51,13 @@ def text_to_speech(text):
     # Convert and play the audio
     sound = AudioSegment.from_file(audio_path, format="mp3")
     play(sound)
+
+
+if os.getenv("RENDER") != "true":
+    import sounddevice as sd
+else:
+    sd = None  # or mock functions if needed
+
 def record_audio(filename="user_audio.wav", duration=5, samplerate=44100):
     print("Recording... Speak now!")
     audio_data = sd.rec(int(duration * samplerate), samplerate=samplerate, channels=1, dtype=np.int16)
