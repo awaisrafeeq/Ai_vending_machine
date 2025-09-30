@@ -17,7 +17,7 @@ Babel==2.15.0
 beautifulsoup4==4.12.3
 bleach==6.1.0
 blinker==1.9.0
-cachetools==5.5.2media
+cachetools==5.5.2
 certifi==2024.7.4
 cffi==1.16.0
 cftime==1.6.4.post1
@@ -287,6 +287,7 @@ xarray==2025.4.0
 yarl==1.18.3
 yfinance==0.2.58
 zstandard==0.23.0
+
 
 
 
