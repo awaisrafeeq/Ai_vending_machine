@@ -3,7 +3,6 @@ services:
     name: ai_vending_machine
     env: python
     plan: free
-#    buildCommand: pip install -r requirements.txt
     startCommand: uvicorn filehandle_databasess_copy:app
     envVars:
       - key: OPENAI_API_KEY
