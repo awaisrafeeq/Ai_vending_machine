@@ -5,5 +5,7 @@ services:
     plan: free
 #    buildCommand: pip install -r requirements.txt
     startCommand: uvicorn filehandle_databasess_copy:app
+    envVars:
       - key: OPENAI_API_KEY
         sync: false
+    pythonVersion: "3.11.9"
