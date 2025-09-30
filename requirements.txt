@@ -126,7 +126,7 @@ marshmallow==3.26.1
 matplotlib==3.9.1
 matplotlib-inline==0.1.7
 mdurl==0.1.2
-mediapipe==0.10.14
+mediapipe==0.8.9 --no-cache-dir
 MetaTrader5==5.0.4803
 mistune==3.0.2
 ml-dtypes==0.4.0
@@ -287,6 +287,7 @@ xarray==2025.4.0
 yarl==1.18.3
 yfinance==0.2.58
 zstandard==0.23.0
+
 
 
 
