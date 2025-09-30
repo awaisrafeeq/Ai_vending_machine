@@ -38,7 +38,7 @@ app.add_middleware(
 )
 
 # OpenAI client
-api_key = os.getenv('OPENAI_API_KEY') or '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'
+api_key = os.getenv('OPENAI_API_KEY')
 client = OpenAI(api_key=api_key)
 
 DATABASE = 'Newdb.db'
