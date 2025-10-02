@@ -8,5 +8,3 @@ sounddevice==0.4.7
 numpy==1.26.4
 Pillow==10.4.0
 PyAudio==0.2.14
-
-
