@@ -1,10 +1,9 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException, Query, Depends
+from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy.orm import Session
-from database import get_db
-from models import Product
+import sqlite3
 import json
+from openai import OpenAI
 import os
 from dotenv import load_dotenv
 import base64
@@ -13,8 +12,9 @@ import io
 import tempfile
 from typing import Dict, Any
 import logging
+
 from voice_module import speech_to_text, analyze_text_with_llm
-from openai import OpenAI
+
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -39,22 +39,49 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
 # OpenAI client
-api_key = os.getenv("OPENAI_API_KEY")
-if not api_key:
-    logger.warning("OPENAI_API_KEY is not set; OpenAI calls will fail.")
+api_key = os.getenv('OPENAI_API_KEY') or 'YOUR_OPENAI_API_KEY'  # Replace with your actual OpenAI API key
+client = OpenAI(api_key=api_key)
 client = OpenAI(api_key=api_key)
 
-def get_available_categories(db: Session) -> list:
-    """Fetch all unique categories from the products table."""
-    categories = db.query(Product.category).distinct().filter(Product.category.isnot(None)).all()
-    return [cat[0] for cat in categories if cat[0]]
+# Database connection function
+def get_db_connection():
+    """Create a new database connection for each request."""
+    try:
+        conn = sqlite3.connect('Newdb.db')
+        return conn
+    except sqlite3.Error as e:
+        logger.error(f"Database connection error: {e}")
+        raise HTTPException(status_code=500, detail="Database connection failed")
 
-def get_products_by_category_data(db: Session, category: str) -> list:
-    """Fetch all products for a given category (used internally by AI analysis)."""
-    products = db.query(Product.name, Product.price).filter(Product.category.ilike(category)).all()
-    return [{"name": p[0], "price": p[1]} for p in products]
+def get_available_categories() -> list:
+    """Fetch all unique categories from the products table."""
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT DISTINCT category FROM products WHERE category IS NOT NULL")
+        categories = cursor.fetchall()
+        available_categories = [cat[0] for cat in categories if cat[0]]
+        return available_categories
+    except sqlite3.Error as e:
+        logger.error(f"Database error in get_available_categories: {e}")
+        return []
+    finally:
+        conn.close()
+
+def get_products_by_category(category: str) -> list:
+    """Fetch all products for a given category."""
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT name, price FROM products WHERE LOWER(category) = LOWER(?)", (category,))
+        products = cursor.fetchall()
+        return [{"name": product[0], "price": product[1]} for product in products]
+    except sqlite3.Error as e:
+        logger.error(f"Database error in get_products_by_category: {e}")
+        return []
+    finally:
+        conn.close()
 
 def validate_image_format(image_data: bytes) -> bool:
     """Validate if the image is in PNG or JPEG format."""
@@ -67,11 +94,11 @@ def validate_image_format(image_data: bytes) -> bool:
         logger.error(f"Image validation error: {e}")
         return False
 
-def analyze_image_with_openai(image_data: bytes, db: Session) -> tuple:
+def analyze_image_with_openai(image_data: bytes) -> tuple:
     """Analyze image using OpenAI's vision model and extract category recommendation."""
     
     # Get available categories from database
-    available_categories = get_available_categories(db)
+    available_categories = get_available_categories()
     if not available_categories:
         logger.error("No categories found in database")
         raise HTTPException(status_code=500, detail="No product categories available")
@@ -155,82 +182,52 @@ def analyze_image_with_openai(image_data: bytes, db: Session) -> tuple:
         return description, category
         
     except Exception as e:
-        logger.error(f"Error calling OpenAI...(truncated 3003 characters)...")
+        logger.error(f"Error calling OpenAI API: {e}")
+        raise HTTPException(status_code=500, detail=f"AI analysis failed: {str(e)}")
 
 @app.get("/")
-async def welcome():
-    return {"message": "Welcome to the Vending Machine AI API!", "endpoints": {
-        "/analyze-image": "POST - Upload an image for analysis",
-        "/categories": "GET - Get all available product categories",
-        "/products": "GET - Get all products",
-        "/products/category/{category_name}": "GET - Get products by category",
-        "/product/{product_id}": "GET - Get product by ID",
-        "/health": "GET - Health check"
-    }}
+async def root():
+    """Root endpoint with API information."""
+    return {
+        "message": "Welcome to the Vending Machine AI API!",
+        "endpoints": {
+            "/analyze-image": "POST - Upload an image for analysis",
+            "/categories": "GET - Get all available product categories",
+            "/health": "GET - Health check"
+        }
+    }
 
 @app.get("/health")
-async def health_check(db: Session = Depends(get_db)):
+async def health_check():
+    """Health check endpoint."""
     try:
-        categories = get_available_categories(db)
-        return {"status": "healthy", "database": "connected", "categories_count": len(categories)}
+        # Test database connection
+        categories = get_available_categories()
+        return {
+            "status": "healthy",
+            "database": "connected",
+            "categories_count": len(categories)
+        }
     except Exception as e:
-        return {"status": "unhealthy", "error": str(e)}
+        return {
+            "status": "unhealthy",
+            "error": str(e)
+        }
 
 @app.get("/categories")
-async def get_categories(db: Session = Depends(get_db)):
-    categories = get_available_categories(db)
-    return {"categories": categories, "total": len(categories)}
-
-@app.get("/products")
-async def get_all_products(db: Session = Depends(get_db)):
-    products = db.query(Product).all()
-    result = []
-    for p in products:
-        p_dict = {c.name: getattr(p, c.name) for c in p.__table__.columns}
-        result.append(p_dict)
-    return JSONResponse(content=result)
-
-@app.get("/category")
-async def get_products_by_category(name: str = Query(..., description="Category name"), db: Session = Depends(get_db)):
-    products = db.query(Product).filter(Product.category.ilike(name)).all()
-    if not products:
-        raise HTTPException(status_code=404, detail=f"No products found in category '{name}'")
-
-    result = []
-    for product in products:
-        product_dict = {c.name: getattr(product, c.name) for c in product.__table__.columns}
-        for field in ['images', 'flavor', 'ingredients']:
-            if product_dict.get(field):
-                try:
-                    product_dict[field] = json.loads(product_dict[field])
-                except json.JSONDecodeError:
-                    product_dict[field] = []
-            else:
-                product_dict[field] = []
-        result.append(product_dict)
-
-    return JSONResponse(content=result)
-
-@app.get("/product")
-async def get_product(id: int = Query(..., description="Product ID"), db: Session = Depends(get_db)):
-    product = db.query(Product).filter(Product.id == id).first()
-    if product is None:
-        raise HTTPException(status_code=404, detail="Product not found")
-
-    product_dict = {c.name: getattr(product, c.name) for c in product.__table__.columns}
-    for field in ['images', 'flavor', 'ingredients']:
-        if product_dict.get(field):
-            try:
-                product_dict[field] = json.loads(product_dict[field])
-            except json.JSONDecodeError:
-                product_dict[field] = []
-        else:
-            product_dict[field] = []
-
-    return JSONResponse(content=product_dict)
+async def get_categories():
+    """Get all available product categories."""
+    try:
+        categories = get_available_categories()
+        return {
+            "categories": categories,
+            "total": len(categories)
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch categories: {str(e)}")
 
 @app.post("/analyze-image")
-async def analyze_image(file: UploadFile = File(...), db: Session = Depends(get_db)):
+async def analyze_image(file: UploadFile = File(...)):
     """
     Upload an image and get AI-powered product recommendations.
     
@@ -267,10 +264,10 @@ async def analyze_image(file: UploadFile = File(...), db: Session = Depends(get_
         logger.info(f"Processing image: {file.filename}, size: {len(image_data)} bytes")
         
         # Analyze image with OpenAI
-        description, recommended_category = analyze_image_with_openai(image_data, db)
-
+        description, recommended_category = analyze_image_with_openai(image_data)
+        
         # Get products for the recommended category
-        products = get_products_by_category_data(db, recommended_category)
+        products = get_products_by_category(recommended_category)
         
         # Create response
         result = {
@@ -298,65 +295,62 @@ async def analyze_image(file: UploadFile = File(...), db: Session = Depends(get_
             detail=f"An unexpected error occurred while processing the image: {str(e)}"
         )
 
-@app.post("/analyze-audio")
-async def analyze_audio(file: UploadFile = File(...), db: Session = Depends(get_db)):
-    # Validate content type
-    if not file.content_type or not file.content_type.startswith("audio/"):
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid file type. Please upload an audio file."
-        )
-    
-    audio_data = await file.read()
-    
-    # Optional: file size limit
-    if len(audio_data) > 10 * 1024 * 1024:
-        raise HTTPException(
-            status_code=400,
-            detail="Audio file too large. Maximum size is 10MB."
-        )
-    
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp_audio:
-        temp_audio.write(audio_data)
-        temp_path = temp_audio.name
-    
+@app.get("/products/{category}")
+async def get_products_by_category_endpoint(category: str):
+    """Get all products for a specific category."""
     try:
-        # Convert audio to text
-        transcribed_text = speech_to_text(temp_path)
+        products = get_products_by_category(category)
+        if not products:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No products found for category: {category}"
+            )
         
-        # Get description and category tuple
-        description, category = analyze_text_with_llm(transcribed_text)
-        
-        # Get products list by category
-        products = get_products_by_category_data(db, category)
-        print(file.filename, transcribed_text, description)
-        response = {
-            "success": True,
-            "filename": file.filename,
-            "file_size_bytes": len(audio_data),
-            "transcription": transcribed_text,
-            "analysis": {
-                "description": description,
-                "recommended_category": category,
-                "products": products,
-                "total_products": len(products)
-            },
-            "message": "Audio analyzed successfully!"
+        return {
+            "category": category,
+            "products": products,
+            "total": len(products)
         }
-        
-        return JSONResponse(content=response)
-    
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"An unexpected error occurred while processing the audio: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=f"Failed to fetch products: {str(e)}")
+    
+
+# @app.post("/analyze-audio")
+# async def analyze_audio(file: UploadFile = File(...)):
+#     audio_data = await file.read()
+#     # Save audio temporarily, or pass directly if you modify speech_to_text for bytes
+#     temp_path = "/tmp/temp_audio.wav"
+#     with open(temp_path, "wb") as f:
+#         f.write(audio_data)
+#     # Convert audio to text
+#     transcribed_text = speech_to_text(temp_path)
+#     # Analyze text with LLM
+#     analysis_result = analyze_text_with_llm(transcribed_text)
+#     return analysis_result    
+
+@app.post("/analyze-audio")
+async def analyze_audio(file: UploadFile = File(...)):
+    audio_data = await file.read()
+    # Use tempfile for cross-platform temp file creation
+    import tempfile
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp_audio:
+        temp_audio.write(audio_data)
+        temp_path = temp_audio.name
+    try:
+        # Convert audio to text
+        transcribed_text = speech_to_text(temp_path)
+        # Analyze text with LLM
+        analysis_result = analyze_text_with_llm(transcribed_text)
+        return analysis_result
     finally:
+        # Clean up the temp file
+        import os
         if os.path.exists(temp_path):
             os.remove(temp_path)
 
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000, reload=True)
+
