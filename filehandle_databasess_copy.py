@@ -324,8 +324,10 @@ async def analyze_audio(file: UploadFile = File(...), db: Session = Depends(get_
         # Convert audio to text
         transcribed_text = speech_to_text(temp_path)
         
-        # Get description and category tuple
-        description, category = analyze_text_with_llm(transcribed_text)
+        # Get description and category from dictionary
+        result = analyze_text_with_llm(transcribed_text)
+        description = result["description"]
+        category = result["category"]
         
         # Get products list by category
         products = get_products_by_category_data(db, category)

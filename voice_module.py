@@ -12,7 +12,7 @@ import wave
 import io
 import os
 import logging
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text  # Added text import
 from sqlalchemy.orm import Session
 from models import Product  # Assuming this is defined in models.py
 from database import DATABASE_URL  # Assuming this is set up in database.py
@@ -20,8 +20,10 @@ from database import DATABASE_URL  # Assuming this is set up in database.py
 # Load environment variables from .env file
 load_dotenv()
 # Get the API key
-api_key = os.getenv('OPENAI_API_KEY')
-client = OpenAI(api_key=api_key)
+key = os.getenv("OPENAI_API_KEY")
+if not key:
+    raise RuntimeError("OPENAI_API_KEY is not set. Provide it via env or .env/--env-file.")
+client = OpenAI(api_key=key)
 
 def speech_to_text(file_path):
     with open(file_path, "rb") as audio_file:
@@ -76,18 +78,19 @@ def get_db_connection():
     try:
         engine = create_engine(DATABASE_URL)
         session = Session(engine)
+        logger.info("Database connection established successfully")
         return session
     except Exception as e:
         logger.error(f"Database connection error: {e}")
         raise HTTPException(status_code=500, detail="Database connection failed")
-
+    
 def get_available_categories() -> list:
     """Fetch all unique categories from the products table."""
     conn = get_db_connection()
     try:
-        cursor = conn.execute("SELECT DISTINCT category FROM products WHERE category IS NOT NULL")
-        categories = cursor.fetchall()
+        categories = conn.query(Product.category).distinct().filter(Product.category.isnot(None)).all()
         available_categories = [cat[0] for cat in categories if cat[0]]
+        logger.info(f"Fetched categories: {available_categories}")  # Added for debugging
         return available_categories
     except Exception as e:
         logger.error(f"Database error in get_available_categories: {e}")
@@ -131,6 +134,7 @@ def analyze_text_with_llm(transcribed_text: str) -> dict:
         )
 
         content = response.choices[0].message.content
+        logger.info(f"LLM response content: {content}")  # Added for debugging
         description = ""
         category = ""
 
@@ -142,6 +146,7 @@ def analyze_text_with_llm(transcribed_text: str) -> dict:
 
         # Fallback parsing if structured format isn't used
         if not description or not category:
+            logger.warning(f"Failed to parse structured response, using fallback: {content}")
             # Try to extract category from available categories
             for available_cat in available_categories:
                 if available_cat.lower() in content.lower():
@@ -157,8 +162,12 @@ def analyze_text_with_llm(transcribed_text: str) -> dict:
             if not description:
                 description = "Looking good! Ready for some snacks?"
         
+        logger.info(f"Returning description: {description}, category: {category}")  # Added for debugging
         return {"description": description, "category": category}
         
     except Exception as e:
         logger.error(f"Error calling OpenAI API: {e}")
         raise HTTPException(status_code=500, detail=f"AI analysis failed: {str(e)}")
+
+
+    
